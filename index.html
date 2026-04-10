@@ -904,7 +904,7 @@ function App() {
               ))}
             </div>
             <div style={{textAlign:'center',marginTop:20}}>
-              <button className="btn btn-gold" onClick={()=>{ setScreen('join'); setGs(null); setTimeLeft(Q_SECS); }}>
+              <button className="btn btn-gold" onClick={()=>{ clearInterval(syncRef.current); localStorage.removeItem(SK(roomCode)); setScreen('join'); setGs(null); setRoomCode(''); setTimeLeft(Q_SECS); }}>
                 Play Again
               </button>
             </div>
