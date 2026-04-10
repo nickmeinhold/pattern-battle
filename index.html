@@ -197,6 +197,7 @@ function App() {
 
   // Audio / voice
   const [vol, setVol]           = useState(0);
+  const [eqBands, setEqBands]   = useState(() => new Array(32).fill(0));
   const [micOk, setMicOk]       = useState(false);
   const [micErr, setMicErr]     = useState('');
   const [transcript, setTranscript] = useState('');
@@ -325,10 +326,24 @@ function App() {
       analyserRef.current = an;
       ctx.createMediaStreamSource(stream).connect(an);
       const data = new Uint8Array(an.frequencyBinCount);
+      const EQ_N = 32;
+      const binsPer = Math.floor(an.frequencyBinCount / EQ_N);
+      let frameCount = 0;
       function tick() {
         an.getByteFrequencyData(data);
         const rms = Math.sqrt(data.reduce((s,v)=>s+v*v,0)/data.length)/128;
         setVol(rms);
+        // Sample frequency bands every 2 frames for performance
+        if (frameCount++ % 2 === 0) {
+          const bands = new Array(EQ_N);
+          for (let i = 0; i < EQ_N; i++) {
+            let sum = 0;
+            const start = i * binsPer;
+            for (let j = start; j < start + binsPer; j++) sum += data[j];
+            bands[i] = (sum / binsPer) / 255;
+          }
+          setEqBands(bands);
+        }
         const cur = gsRef.current;
         if (cur?.phase === 'question' && !buzzedRef.current && rms > BUZZ_DB) {
           buzzedRef.current = true;
@@ -639,12 +654,8 @@ function App() {
     clearTimeout(debounceTimerRef.current);
   }, []);
 
-  // ── Volume Bars ───────────────────────────────────────────────────────────
-  const BAR_N = 20;
-  const bars = Array.from({length:BAR_N}, (_,i) => ({
-    active: vol > (i+1)/BAR_N * 0.7,
-    color: i<10 ? '#22d3ee' : i<15 ? '#fbbf24' : '#ef4444',
-  }));
+  // ── EQ Colors ────────────────────────────────────────────────────────────
+  const eqColor = (h) => h > 0.7 ? '#ef4444' : h > 0.4 ? '#fbbf24' : '#22d3ee';
 
   // ── Timer Arc ─────────────────────────────────────────────────────────────
   const timerPct   = timeLeft / Q_SECS;
@@ -906,19 +917,19 @@ function App() {
       {(phase==='question'||phase==='buzzedin'||phase==='result') && (
         <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',position:'relative'}}>
 
-          {/* VU Meter — vertical strip on left edge */}
-          <div style={{position:'absolute',left:0,top:0,bottom:0,width:6,zIndex:10,
-            background:'rgba(255,255,255,.03)'}}>
-            <div style={{position:'absolute',bottom:0,left:0,right:0,
-              height:`${Math.min(100, vol * 300)}%`,
-              transition:'height .08s linear',
-              background: vol > 0.3 ? 'linear-gradient(to top,#22d3ee,#fbbf24,#ef4444)' :
-                         vol > 0.15 ? 'linear-gradient(to top,#22d3ee,#fbbf24)' :
-                                      '#22d3ee',
-              boxShadow: vol > BUZZ_DB ? `0 0 8px ${vol > 0.3 ? '#ef4444' : '#22d3ee'}` : 'none'}}/>
-            <div style={{position:'absolute',left:0,right:0,
-              bottom:`${BUZZ_DB * 300}%`,
-              height:1,background:'rgba(251,191,36,.5)'}}/>
+          {/* Graphic EQ — horizontal bar along the bottom */}
+          <div style={{position:'absolute',bottom:0,left:0,right:0,height:48,zIndex:10,
+            display:'flex',alignItems:'flex-end',gap:2,padding:'0 8px',
+            background:'linear-gradient(to top,rgba(6,9,20,.95),transparent)',
+            pointerEvents:'none'}}>
+            {eqBands.map((h,i) => (
+              <div key={i} style={{flex:1,borderRadius:'2px 2px 0 0',
+                height:`${Math.max(2, h * 100)}%`,
+                background: eqColor(h),
+                opacity: h > 0.05 ? 0.7 + h * 0.3 : 0.15,
+                boxShadow: h > 0.5 ? `0 0 6px ${eqColor(h)}` : 'none',
+                transition:'height .06s linear'}}/>
+            ))}
           </div>
 
           {/* Single column content */}
