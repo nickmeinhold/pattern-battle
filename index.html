@@ -996,24 +996,8 @@ function App() {
             {/* Question card */}
             {curQ && (
               <div className="card" style={{animation:'fadeUp .35s ease'}}>
-                <div style={{display:'flex',alignItems:'flex-start',gap:16,marginBottom:20}}>
-                  {(phase==='question'||phase==='buzzedin') && (
-                    <div style={{position:'relative',width:80,height:80,flexShrink:0}}>
-                      <svg width={80} height={80} style={{transform:'rotate(-90deg)'}}>
-                        <circle cx={40} cy={40} r={36} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth={5}/>
-                        <circle cx={40} cy={40} r={36} fill="none" stroke={timerColor} strokeWidth={5}
-                          strokeDasharray={arc} strokeDashoffset={arc-dash} strokeLinecap="round"
-                          style={{transition:'stroke-dashoffset .5s, stroke .5s',filter:`drop-shadow(0 0 6px ${timerColor})`}}/>
-                      </svg>
-                      <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',
-                        fontFamily:"'JetBrains Mono',monospace",fontSize:20,fontWeight:700,color:timerColor}}>
-                        {timeLeft}
-                      </div>
-                    </div>
-                  )}
-                  <div style={{fontSize:14,lineHeight:1.7,color:'rgba(255,255,255,.9)',fontFamily:"'JetBrains Mono',monospace",paddingTop:4}}>
-                    {curQ.question}
-                  </div>
+                <div style={{fontSize:14,lineHeight:1.7,color:'rgba(255,255,255,.9)',fontFamily:"'JetBrains Mono',monospace"}}>
+                  {curQ.question}
                 </div>
               </div>
             )}
@@ -1034,20 +1018,36 @@ function App() {
                     </div>
                   )}
 
-                  {/* Live transcript + ghost text */}
+                  {/* Live transcript + ghost text + timer */}
                   {(listening || transcript) && !judging && (
-                    <div style={{background:'rgba(34,211,238,.06)',border:'1px solid rgba(34,211,238,.15)',
-                      borderRadius:8,padding:'12px 14px',marginTop:8,
-                      fontFamily:"'JetBrains Mono',monospace",fontSize:14,lineHeight:1.6,minHeight:44}}>
-                      <span style={{color:'#22d3ee'}}>{transcript}</span>
-                      <span style={{color:'rgba(34,211,238,.3)',fontStyle:'italic',transition:'opacity .1s'}}>
-                        {ghostText}
-                      </span>
-                      {listening && (
-                        <span style={{display:'inline-block',width:2,height:'1.1em',
-                          background:'#22d3ee',animation:'blink 1s step-end infinite',
-                          verticalAlign:'text-bottom',marginLeft:2}}/>
-                      )}
+                    <div style={{display:'flex',alignItems:'center',gap:14,marginTop:8}}>
+                      {/* Timer ring */}
+                      <div style={{position:'relative',width:56,height:56,flexShrink:0}}>
+                        <svg width={56} height={56} style={{transform:'rotate(-90deg)'}}>
+                          <circle cx={28} cy={28} r={24} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth={4}/>
+                          <circle cx={28} cy={28} r={24} fill="none" stroke={timerColor} strokeWidth={4}
+                            strokeDasharray={2*Math.PI*24} strokeDashoffset={2*Math.PI*24*(1-timerPct)} strokeLinecap="round"
+                            style={{transition:'stroke-dashoffset .5s, stroke .5s',filter:`drop-shadow(0 0 4px ${timerColor})`}}/>
+                        </svg>
+                        <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',
+                          fontFamily:"'JetBrains Mono',monospace",fontSize:16,fontWeight:700,color:timerColor}}>
+                          {timeLeft}
+                        </div>
+                      </div>
+                      {/* Transcript */}
+                      <div style={{flex:1,background:'rgba(34,211,238,.06)',border:'1px solid rgba(34,211,238,.15)',
+                        borderRadius:8,padding:'12px 14px',
+                        fontFamily:"'JetBrains Mono',monospace",fontSize:14,lineHeight:1.6,minHeight:44}}>
+                        <span style={{color:'#22d3ee'}}>{transcript}</span>
+                        <span style={{color:'rgba(34,211,238,.3)',fontStyle:'italic',transition:'opacity .1s'}}>
+                          {ghostText}
+                        </span>
+                        {listening && (
+                          <span style={{display:'inline-block',width:2,height:'1.1em',
+                            background:'#22d3ee',animation:'blink 1s step-end infinite',
+                            verticalAlign:'text-bottom',marginLeft:2}}/>
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -1090,9 +1090,23 @@ function App() {
             )}
 
             {phase==='question' && !buzzer && (
-              <div style={{textAlign:'center',padding:14,color:'rgba(255,255,255,.28)',fontSize:13,
-                letterSpacing:2,animation:'glow 2.5s ease-in-out infinite'}}>
-                🎤 SPEAK TO BUZZ IN
+              <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:14,padding:14}}>
+                <div style={{position:'relative',width:64,height:64}}>
+                  <svg width={64} height={64} style={{transform:'rotate(-90deg)'}}>
+                    <circle cx={32} cy={32} r={28} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth={4}/>
+                    <circle cx={32} cy={32} r={28} fill="none" stroke={timerColor} strokeWidth={4}
+                      strokeDasharray={2*Math.PI*28} strokeDashoffset={2*Math.PI*28*(1-timerPct)} strokeLinecap="round"
+                      style={{transition:'stroke-dashoffset .5s, stroke .5s',filter:`drop-shadow(0 0 4px ${timerColor})`}}/>
+                  </svg>
+                  <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',
+                    fontFamily:"'JetBrains Mono',monospace",fontSize:18,fontWeight:700,color:timerColor}}>
+                    {timeLeft}
+                  </div>
+                </div>
+                <div style={{color:'rgba(255,255,255,.28)',fontSize:13,
+                  letterSpacing:2,animation:'glow 2.5s ease-in-out infinite'}}>
+                  🎤 SPEAK TO BUZZ IN
+                </div>
               </div>
             )}
           </div>
