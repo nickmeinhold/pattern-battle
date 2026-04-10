@@ -843,12 +843,21 @@ function App() {
           <div style={{fontSize:12,color:'rgba(255,255,255,.4)',letterSpacing:1}}>Q {qIdx}/{qTotal}</div>
         )}
         <div style={{flex:1}}/>
-        {/* Score */}
-        <div style={{background:'rgba(251,191,36,.1)',border:'1px solid rgba(251,191,36,.2)',
-          borderRadius:8,padding:'4px 14px',display:'flex',alignItems:'center',gap:8}}>
-          <span style={{fontSize:11,color:'rgba(255,255,255,.45)'}}>YOU</span>
-          <span style={{fontWeight:700,color:'#fbbf24',fontSize:16}}>{myScore}</span>
-        </div>
+        {/* All player scores */}
+        {sorted.map(([id,p])=>(
+          <div key={id} style={{
+            background: id===pid ? 'rgba(251,191,36,.1)' : 'rgba(255,255,255,.05)',
+            border: `1px solid ${id===pid ? 'rgba(251,191,36,.2)' : 'rgba(255,255,255,.08)'}`,
+            borderRadius:8,padding:'4px 12px',display:'flex',alignItems:'center',gap:6}}>
+            <div style={{width:20,height:20,borderRadius:'50%',flexShrink:0,
+              background:`hsl(${id.charCodeAt(0)*17}deg 55% 55%)`,
+              display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:10}}>
+              {p.name[0]?.toUpperCase()}
+            </div>
+            <span style={{fontWeight:700,color:id===pid?'#fbbf24':'rgba(255,255,255,.7)',fontSize:15,
+              fontFamily:"'JetBrains Mono',monospace"}}>{p.score||0}</span>
+          </div>
+        ))}
         <div style={{fontSize:11,color:'rgba(255,255,255,.2)',fontFamily:"'JetBrains Mono',monospace",letterSpacing:2}}>{roomCode}</div>
       </div>
 
@@ -895,29 +904,26 @@ function App() {
 
       {/* ── MAIN GAME ── */}
       {(phase==='question'||phase==='buzzedin'||phase==='result') && (
-        <div style={{flex:1,display:'flex',overflow:'hidden'}}>
+        <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',position:'relative'}}>
 
-          {/* LEFT: Vertical VU Meter */}
-          <div style={{width:10,flexShrink:0,background:'rgba(255,255,255,.03)',
-            borderRight:'1px solid rgba(255,255,255,.05)',position:'relative',overflow:'hidden'}}>
-            {/* Meter fill — bottom to top */}
+          {/* VU Meter — vertical strip on left edge */}
+          <div style={{position:'absolute',left:0,top:0,bottom:0,width:6,zIndex:10,
+            background:'rgba(255,255,255,.03)'}}>
             <div style={{position:'absolute',bottom:0,left:0,right:0,
               height:`${Math.min(100, vol * 300)}%`,
               transition:'height .08s linear',
               background: vol > 0.3 ? 'linear-gradient(to top,#22d3ee,#fbbf24,#ef4444)' :
                          vol > 0.15 ? 'linear-gradient(to top,#22d3ee,#fbbf24)' :
                                       '#22d3ee',
-              boxShadow: vol > BUZZ_DB ? `0 0 12px ${vol > 0.3 ? '#ef4444' : '#22d3ee'}` : 'none',
-              borderRadius:'2px 2px 0 0'}}/>
-            {/* Buzz threshold line */}
+              boxShadow: vol > BUZZ_DB ? `0 0 8px ${vol > 0.3 ? '#ef4444' : '#22d3ee'}` : 'none'}}/>
             <div style={{position:'absolute',left:0,right:0,
               bottom:`${BUZZ_DB * 300}%`,
-              height:1,background:'rgba(251,191,36,.4)',
-              boxShadow:'0 0 4px rgba(251,191,36,.3)'}}/>
+              height:1,background:'rgba(251,191,36,.5)'}}/>
           </div>
 
-          {/* CENTER: Question */}
-          <div style={{flex:1,padding:'22px 26px',overflowY:'auto',display:'flex',flexDirection:'column',gap:18}}>
+          {/* Single column content */}
+          <div style={{flex:1,padding:'22px 32px 22px 20px',overflowY:'auto',
+            display:'flex',flexDirection:'column',gap:18,maxWidth:720,margin:'0 auto',width:'100%'}}>
 
             {/* Result reveal */}
             {phase==='result' && lr && (
@@ -1074,33 +1080,6 @@ function App() {
                 🎤 SPEAK TO BUZZ IN
               </div>
             )}
-          </div>
-
-          {/* RIGHT: Scoreboard */}
-          <div style={{width:210,flexShrink:0,background:'rgba(255,255,255,.025)',
-            borderLeft:'1px solid rgba(255,255,255,.07)',padding:'18px 14px',overflowY:'auto'}}>
-            <div style={{fontSize:11,letterSpacing:2,color:'rgba(255,255,255,.35)',marginBottom:12}}>SCOREBOARD</div>
-            {sorted.map(([id,p],i)=>(
-              <div key={id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',
-                borderRadius:10,marginBottom:8,transition:'all .3s',
-                background: id===pid ? 'rgba(251,191,36,.08)' : 'rgba(255,255,255,.04)',
-                border: `1px solid ${id===pid ? 'rgba(251,191,36,.2)' : 'rgba(255,255,255,.06)'}`}}>
-                <div style={{width:30,height:30,borderRadius:'50%',flexShrink:0,
-                  background:`hsl(${id.charCodeAt(0)*17}deg 55% 55%)`,
-                  display:'flex',alignItems:'center',justifyContent:'center',fontWeight:700,fontSize:13}}>
-                  {p.name[0]?.toUpperCase()}
-                </div>
-                <div style={{flex:1,overflow:'hidden'}}>
-                  <div style={{fontSize:13,fontWeight:600,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{p.name}</div>
-                  {id===gs?.buzzer?.pid && phase==='buzzedin' && (
-                    <div style={{fontSize:10,color:'#22d3ee',letterSpacing:1,animation:'glow 1s infinite'}}>ANSWERING</div>
-                  )}
-                </div>
-                <div style={{fontFamily:"'JetBrains Mono',monospace",fontWeight:700,fontSize:16,
-                  color: i===0?'#fbbf24':'rgba(255,255,255,.8)'}}>{p.score}</div>
-              </div>
-            ))}
-
           </div>
         </div>
       )}
