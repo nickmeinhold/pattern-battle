@@ -21,6 +21,7 @@
   @keyframes spin{to{transform:rotate(360deg)}}
   @keyframes correctFlash{0%,100%{box-shadow:none}50%{box-shadow:0 0 60px 20px rgba(34,197,94,.25)}}
   @keyframes wrongFlash{0%,100%{box-shadow:none}50%{box-shadow:0 0 60px 20px rgba(239,68,68,.25)}}
+  @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
   .opt{width:100%;text-align:left;padding:14px 18px;border-radius:10px;cursor:pointer;
     font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.5;
     background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);
@@ -51,13 +52,16 @@ const { useState, useEffect, useRef } = React;
 
 // ── CONFIG ────────────────────────────────────────────────────────────────────
 const BUZZ_DB   = 0.13;
-const Q_SECS    = 22;
+const Q_SECS    = 30;
 const SYNC_MS   = 400;
 const NUM_QS    = 7;
 const PTS_RIGHT = 100;
 const PTS_WRONG = -30;
 const PTS_SPEED = 60;
 const API_KEY   = ['sk-ant-api03-3H4LT4ZJZhwMQRwFeLIqcP0xjfQBiW0uFRRYr8PFwkr','kVniC-Fm1Dv7kQy8MmYWSHPPe9qN2i8V1IoQbA6l-ug-p-w0vgAA'].join('');
+const PRED_DEBOUNCE = 500;
+const RETREAT_MS    = 20;
+const SILENCE_MS    = 2500;
 
 const TOPICS = [
   "Singleton pattern — pros, cons, thread safety, when to avoid",
@@ -84,34 +88,6 @@ const SK  = c => `pb:v5:${c}`;
 // BroadcastChannel for instant cross-tab sync
 const BC = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('pattern-battle') : null;
 
-function extractLetter(text) {
-  const t = text.toUpperCase().replace(/[^A-Z0-9\s]/g, ' ').trim();
-  if (/^[ABCD]$/.test(t)) return t;
-  const m = t.match(/(?:ANSWER\s*(?:IS)?|THINK|OPTION|CHOOSE|PICK|SAY|SELECT|IT'?S?)?\s*\b([ABCD])\b/);
-  return m ? m[1] : null;
-}
-function matchKeywords(text, kws=[]) {
-  if (!kws.length) return false;
-  const t = text.toLowerCase();
-  return kws.filter(k => t.includes(k.toLowerCase())).length >= Math.ceil(kws.length * 0.45);
-}
-function fuzzyOption(text, optText) {
-  const t = text.toLowerCase();
-  const words = optText.toLowerCase().split(/\s+/).filter(w => w.length > 4);
-  if (!words.length) return false;
-  return words.filter(w => t.includes(w)).length >= Math.max(1, Math.floor(words.length * 0.5));
-}
-function validateAnswer(spoken, question) {
-  if (!spoken || !question) return { letter: null };
-  const letter = extractLetter(spoken);
-  if (letter) return { letter, method: 'letter' };
-  for (const [l, txt] of Object.entries(question.options || {}))
-    if (fuzzyOption(spoken, txt)) return { letter: l, method: 'option-text' };
-  if (matchKeywords(spoken, question.keywords || []))
-    return { letter: question.correct, method: 'keywords' };
-  return { letter: null, method: 'none' };
-}
-
 // ── STORAGE (localStorage + BroadcastChannel) ─────────────────────────────────
 function readRoom(code) {
   try { return JSON.parse(localStorage.getItem(SK(code)) || 'null'); }
@@ -124,23 +100,25 @@ function writeRoom(code, state) {
   } catch {}
 }
 
-// ── API (direct Anthropic with browser header) ────────────────────────────────
-async function genQ(topic, apiKey) {
+// ── API ───────────────────────────────────────────────────────────────────────
+const API_HEADERS = {
+  'Content-Type': 'application/json',
+  'x-api-key': API_KEY,
+  'anthropic-version': '2023-06-01',
+  'anthropic-dangerous-direct-browser-access': 'true',
+};
+
+async function genQ(topic) {
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
+    headers: API_HEADERS,
     body: JSON.stringify({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 700,
       system: `You are a quiz generator for software design patterns.
 Return ONLY valid JSON — no markdown, no backticks, zero preamble:
-{"question":"practical scenario-based question","options":{"A":"...","B":"...","C":"...","D":"..."},"correct":"B","explanation":"2 sentences max","keywords":["5","to","8","key","words","from","correct","answer"]}
-Rules: options must be clearly distinct; correct answer definitively right; keywords are key nouns/phrases from the CORRECT answer option text.`,
+{"question":"practical scenario-based question","options":{"A":"...","B":"...","C":"...","D":"..."},"correct":"B","explanation":"2 sentences max"}
+Rules: options must be clearly distinct; correct answer definitively right.`,
       messages: [{ role: 'user', content: `Topic: ${topic}` }],
     }),
   });
@@ -150,11 +128,63 @@ Rules: options must be clearly distinct; correct answer definitively right; keyw
   return JSON.parse(raw);
 }
 
+// Streaming helper — parses Anthropic SSE, calls onToken per text delta
+async function streamChat({ model, system, messages, maxTokens = 100, signal, onToken }) {
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: API_HEADERS,
+    body: JSON.stringify({ model, max_tokens: maxTokens, stream: true, system, messages }),
+    signal,
+  });
+  if (!res.ok) throw new Error(`API ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let full = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split('\n');
+    buf = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      try {
+        const d = JSON.parse(line.slice(6));
+        if (d.type === 'content_block_delta' && d.delta?.text) {
+          full += d.delta.text;
+          onToken(d.delta.text, full);
+        }
+      } catch {}
+    }
+  }
+  return full;
+}
+
+// LLM answer judge — returns {correct, score, feedback}
+async function callJudge(question, spoken, signal) {
+  const q = question;
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: API_HEADERS,
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 200,
+      system: `You judge quiz answers. Given a multiple-choice question with the correct answer, evaluate whether the player's spoken response demonstrates understanding of the correct concept. They may say a letter (A/B/C/D), name the pattern, describe the concept, or give a partial answer. Be lenient with exact wording but strict on conceptual correctness. Return ONLY valid JSON — no markdown, no backticks:
+{"correct":true,"score":85,"feedback":"Good — correctly identified the pattern and its key benefit."}
+Score guide: 100=perfect, 70-99=right concept with gaps, 50-69=partially correct, 0-49=wrong.`,
+      messages: [{ role: 'user', content: `Question: ${q.question}\nA: ${q.options.A}\nB: ${q.options.B}\nC: ${q.options.C}\nD: ${q.options.D}\nCorrect: ${q.correct} — ${q.options[q.correct]}\nExplanation: ${q.explanation}\n\nPlayer said: "${spoken}"` }],
+    }),
+    signal,
+  });
+  const d = await res.json();
+  if (d.error) throw new Error(d.error.message);
+  const raw = d.content?.[0]?.text?.replace(/```json|```/g, '').trim();
+  return JSON.parse(raw);
+}
+
 // ── APP ───────────────────────────────────────────────────────────────────────
 function App() {
-  // API key (hardcoded for frictionless access)
-  const apiKey = API_KEY;
-
   // Identity
   const [pid]                   = useState(uid);
   const [pname, setPname]       = useState('');
@@ -172,6 +202,10 @@ function App() {
   const [transcript, setTranscript] = useState('');
   const [listening, setListening]   = useState(false);
 
+  // Prediction + judging
+  const [ghostText, setGhostText]   = useState('');
+  const [judging, setJudging]       = useState(false);
+
   // UI
   const [joining, setJoining]       = useState(false);
   const [genProgress, setGenProgress] = useState(0);
@@ -182,22 +216,30 @@ function App() {
   const [showFallback, setShowFallback]   = useState(false);
   const [newRoomCode]           = useState(() => uid().slice(0,6).toUpperCase());
 
-  const analyserRef = useRef(null);
-  const streamRef   = useRef(null);
-  const animRef     = useRef(null);
-  const syncRef     = useRef(null);
-  const sttRef      = useRef(null);
-  const buzzedRef   = useRef(false);
-  const gsRef       = useRef(null);
-  const codeRef     = useRef('');
-  const pnameRef    = useRef('');
-  const pidRef      = useRef(pid);
-  const apiKeyRef   = useRef(API_KEY);
+  // Refs
+  const analyserRef    = useRef(null);
+  const streamRef      = useRef(null);
+  const animRef        = useRef(null);
+  const syncRef        = useRef(null);
+  const sttRef         = useRef(null);
+  const buzzedRef      = useRef(false);
+  const gsRef          = useRef(null);
+  const codeRef        = useRef('');
+  const pnameRef       = useRef('');
+  const pidRef         = useRef(pid);
+
+  // Prediction refs
+  const predAbortRef     = useRef(null);
+  const judgeAbortRef    = useRef(null);
+  const retreatTimerRef  = useRef(null);
+  const debounceTimerRef = useRef(null);
+  const ghostTextRef     = useRef('');
+  const lastSpokenRef    = useRef('');
+  const submittedRef     = useRef(false);
 
   gsRef.current    = gs;
   codeRef.current  = roomCode;
   pnameRef.current = pname;
-  apiKeyRef.current = API_KEY;
 
   const phase   = gs?.phase;
   const curQ    = gs?.currentQuestion;
@@ -215,16 +257,23 @@ function App() {
     };
   }, []);
 
+  function resetPredictionState() {
+    cancelAllPredictions();
+    setTranscript('');
+    setFallbackInput('');
+    setShowFallback(false);
+    setListening(false);
+    setJudging(false);
+    submittedRef.current = false;
+  }
+
   function syncState() {
     const state = readRoom(codeRef.current);
     if (!state) return;
     setGs(prev => {
       if (prev?.phase !== 'question' && state.phase === 'question') {
         buzzedRef.current = false;
-        setTranscript('');
-        setFallbackInput('');
-        setShowFallback(false);
-        setListening(false);
+        resetPredictionState();
       }
       return state;
     });
@@ -247,10 +296,7 @@ function App() {
       setGs(prev => {
         if (prev?.phase !== 'question' && state.phase === 'question') {
           buzzedRef.current = false;
-          setTranscript('');
-          setFallbackInput('');
-          setShowFallback(false);
-          setListening(false);
+          resetPredictionState();
         }
         return state;
       });
@@ -316,45 +362,164 @@ function App() {
     doSTT();
   }
 
+  // ── Prediction System ─────────────────────────────────────────────────────
+  function cancelAllPredictions() {
+    predAbortRef.current?.abort();
+    clearInterval(retreatTimerRef.current);
+    clearTimeout(debounceTimerRef.current);
+    ghostTextRef.current = '';
+    setGhostText('');
+  }
+
+  function startPrediction(spoken) {
+    predAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    predAbortRef.current = ctrl;
+    const q = gsRef.current?.currentQuestion;
+    if (!q) return;
+
+    streamChat({
+      model: 'claude-haiku-4-5-20251001',
+      system: 'You predict what a quiz player will say next as they answer a question aloud. Given the question, options, and what they have said so far, output ONLY the predicted continuation (3-8 words). No quotes, no explanation, no repeating what they said. Start with a space if the continuation follows naturally after their last word.',
+      messages: [{ role: 'user', content: `Question: ${q.question}\nA: ${q.options.A}\nB: ${q.options.B}\nC: ${q.options.C}\nD: ${q.options.D}\nCorrect: ${q.correct}\n\nPlayer said so far: "${spoken}"\nPredict continuation:` }],
+      maxTokens: 40,
+      signal: ctrl.signal,
+      onToken: (_tok, full) => {
+        ghostTextRef.current = full;
+        setGhostText(full);
+      },
+    }).catch(() => {}); // silent on abort/error
+  }
+
+  function startRetreat(onDone) {
+    clearInterval(retreatTimerRef.current);
+    retreatTimerRef.current = setInterval(() => {
+      const cur = ghostTextRef.current;
+      if (!cur || cur.length === 0) {
+        clearInterval(retreatTimerRef.current);
+        setGhostText('');
+        if (onDone) onDone();
+        return;
+      }
+      const next = cur.slice(0, -1);
+      ghostTextRef.current = next;
+      setGhostText(next);
+    }, RETREAT_MS);
+  }
+
+  function handleInterimSpeech(spoken) {
+    lastSpokenRef.current = spoken;
+    clearTimeout(debounceTimerRef.current);
+    predAbortRef.current?.abort();
+
+    // If ghost text exists, retreat it
+    if (ghostTextRef.current.length > 0) {
+      startRetreat();
+    }
+
+    // Debounce new prediction — fires after speech pauses
+    const wordCount = spoken.trim().split(/\s+/).length;
+    if (wordCount >= 2) {
+      debounceTimerRef.current = setTimeout(() => {
+        // Clear any remaining ghost, then predict
+        clearInterval(retreatTimerRef.current);
+        ghostTextRef.current = '';
+        setGhostText('');
+        startPrediction(lastSpokenRef.current);
+      }, PRED_DEBOUNCE);
+    }
+  }
+
   // ── STT ───────────────────────────────────────────────────────────────────
   function doSTT() {
     if (sttRef.current?.active) return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { setShowFallback(true); return; }
     const r = new SR();
-    r.continuous = false; r.interimResults = true; r.lang = 'en-US'; r.active = true;
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = 'en-US';
+    r.active = true;
     sttRef.current = r;
     setListening(true);
-    r.onresult = e => {
-      const t = Array.from(e.results).map(x=>x[0].transcript).join('');
-      setTranscript(t);
-      if (e.results[e.results.length-1].isFinal) {
-        r.active = false; setListening(false); handleAnswer(t);
-      }
+    submittedRef.current = false;
+
+    let lastT = '';
+    let silenceTimer = null;
+
+    const submit = (text) => {
+      if (submittedRef.current) return;
+      if (!text || !text.trim()) return;
+      submittedRef.current = true;
+      r.active = false;
+      setListening(false);
+      clearTimeout(silenceTimer);
+      try { r.stop(); } catch {}
+      cancelAllPredictions();
+      handleAnswer(text);
     };
-    r.onerror = () => { r.active=false; setListening(false); setShowFallback(true); };
-    r.onend   = () => { r.active=false; setListening(false); };
+
+    r.onresult = e => {
+      const t = Array.from(e.results).map(x => x[0].transcript).join('');
+      lastT = t;
+      setTranscript(t);
+      if (!submittedRef.current) handleInterimSpeech(t);
+
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(() => submit(lastT), SILENCE_MS);
+    };
+
+    r.onerror = () => {
+      r.active = false;
+      setListening(false);
+      clearTimeout(silenceTimer);
+      if (!submittedRef.current) setShowFallback(true);
+    };
+
+    r.onend = () => {
+      r.active = false;
+      setListening(false);
+      clearTimeout(silenceTimer);
+      if (!submittedRef.current && lastT.trim()) submit(lastT);
+    };
+
     try { r.start(); } catch {}
   }
 
-  // ── Handle Answer ─────────────────────────────────────────────────────────
-  function handleAnswer(spoken) {
+  // ── Handle Answer (async — LLM judges) ─────────────────────────────────────
+  async function handleAnswer(spoken) {
     const state = readRoom(codeRef.current);
     if (!state || state.phase !== 'buzzedin') return;
     if (state.buzzer?.pid !== pidRef.current) return;
 
-    const { letter } = validateAnswer(spoken, state.currentQuestion);
-    const correct    = !!letter && letter === state.currentQuestion?.correct;
-    const elapsed    = (Date.now() - (state.qStart||Date.now())) / 1000;
-    const pts        = correct ? PTS_RIGHT + Math.round(PTS_SPEED * Math.max(0, 1 - elapsed/Q_SECS)) : PTS_WRONG;
+    setJudging(true);
+    cancelAllPredictions();
 
-    setResultFlash(correct ? 'correct' : 'wrong');
+    let result = { correct: false, score: 0, feedback: 'Could not evaluate answer.' };
+    try {
+      const ctrl = new AbortController();
+      judgeAbortRef.current = ctrl;
+      result = await callJudge(state.currentQuestion, spoken, ctrl.signal);
+    } catch (e) {
+      if (e.name === 'AbortError') { setJudging(false); return; }
+      console.warn('Judge failed:', e);
+    }
+
+    setJudging(false);
+
+    const elapsed = (Date.now() - (state.qStart || Date.now())) / 1000;
+    const speedBonus = Math.round(PTS_SPEED * Math.max(0, 1 - elapsed / Q_SECS));
+    const pts = result.correct
+      ? Math.round((result.score / 100) * PTS_RIGHT) + Math.round((result.score / 100) * speedBonus)
+      : PTS_WRONG;
+
+    setResultFlash(result.correct ? 'correct' : 'wrong');
     setTimeout(() => setResultFlash(null), 2500);
 
     const newPlayers = { ...state.players };
     newPlayers[pidRef.current] = {
       ...newPlayers[pidRef.current],
-      score: (newPlayers[pidRef.current]?.score||0) + pts,
+      score: (newPlayers[pidRef.current]?.score || 0) + pts,
     };
 
     const q = state.currentQuestion;
@@ -362,7 +527,8 @@ function App() {
       ...state, phase: 'result', players: newPlayers,
       lastResult: {
         pid: pidRef.current, pname: pnameRef.current,
-        spoken, parsedAs: letter, correct, pts, noAnswer: false,
+        spoken, correct: result.correct, score: result.score,
+        feedback: result.feedback, pts, noAnswer: false,
         correctLetter: q?.correct, correctText: q?.options?.[q?.correct],
         explanation: q?.explanation,
       },
@@ -370,13 +536,14 @@ function App() {
     writeRoom(codeRef.current, updated);
     setGs(updated);
 
-    if (state.hostId === pidRef.current)
-      setTimeout(() => advance(codeRef.current), 5000);
+    setTimeout(() => advance(codeRef.current), 5500);
   }
 
   function submitTextAnswer() {
-    if (!fallbackInput.trim()) return;
+    if (!fallbackInput.trim() || judging) return;
     setShowFallback(false);
+    submittedRef.current = true;
+    cancelAllPredictions();
     handleAnswer(fallbackInput);
   }
 
@@ -397,8 +564,8 @@ function App() {
   function advance(rc) {
     const state = readRoom(rc);
     if (!state) return;
-    const next = (state.currentQ||0) + 1;
-    if (next >= (state.questions||[]).length) {
+    const next = (state.currentQ || 0) + 1;
+    if (next >= (state.questions || []).length) {
       writeRoom(rc, { ...state, phase: 'gameover' });
     } else {
       buzzedRef.current = false;
@@ -441,12 +608,12 @@ function App() {
   // ── Start Game ────────────────────────────────────────────────────────────
   async function startGame() {
     setGenerating(true); setGenProgress(0);
-    const shuffled = [...TOPICS].sort(()=>Math.random()-0.5).slice(0, NUM_QS);
+    const shuffled = [...TOPICS].sort(() => Math.random() - 0.5).slice(0, NUM_QS);
     const questions = [];
-    for (let i=0; i<shuffled.length; i++) {
-      try { questions.push(await genQ(shuffled[i], apiKeyRef.current)); }
+    for (let i = 0; i < shuffled.length; i++) {
+      try { questions.push(await genQ(shuffled[i])); }
       catch(e) { console.warn('Q gen failed:', e); }
-      setGenProgress(i+1);
+      setGenProgress(i + 1);
     }
     if (!questions.length) { setGenerating(false); return; }
 
@@ -466,8 +633,12 @@ function App() {
   useEffect(() => () => {
     cancelAnimationFrame(animRef.current);
     clearInterval(syncRef.current);
-    streamRef.current?.getTracks().forEach(t=>t.stop());
+    streamRef.current?.getTracks().forEach(t => t.stop());
     analyserRef.current?.context?.close?.();
+    predAbortRef.current?.abort();
+    judgeAbortRef.current?.abort();
+    clearInterval(retreatTimerRef.current);
+    clearTimeout(debounceTimerRef.current);
   }, []);
 
   // ── Volume Bars ───────────────────────────────────────────────────────────
@@ -646,7 +817,6 @@ function App() {
             Waiting for host to start the battle...
           </div>
         )}
-
       </div>
     </div>
   );
@@ -754,21 +924,41 @@ function App() {
                     <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
                       <span style={{fontSize:22}}>{lr.correct?'✅':'❌'}</span>
                       <span style={{fontWeight:700,fontSize:15,color:lr.correct?'#4ade80':'#f87171'}}>
-                        {lr.pname}{lr.pid===pid?' (you)':''}: "{lr.spoken}"
+                        {lr.pname}{lr.pid===pid?' (you)':''}
                       </span>
                       <span style={{marginLeft:'auto',fontFamily:"'JetBrains Mono',monospace",fontWeight:700,
                         fontSize:16,color:lr.pts>0?'#4ade80':'#f87171'}}>
                         {lr.pts>0?'+':''}{lr.pts} pts
                       </span>
                     </div>
-                    {lr.parsedAs && <div style={{fontSize:12,color:'rgba(255,255,255,.4)',marginBottom:8}}>
-                      Heard as: <strong style={{color:'rgba(255,255,255,.7)'}}>{lr.parsedAs}</strong>
-                      {lr.correct?' ✓':' — Correct was '+lr.correctLetter}
-                    </div>}
+                    {/* What they said */}
+                    <div style={{fontSize:13,color:'rgba(255,255,255,.5)',marginBottom:8,fontFamily:"'JetBrains Mono',monospace",
+                      fontStyle:'italic',lineHeight:1.5}}>
+                      "{lr.spoken}"
+                    </div>
+                    {/* Score bar */}
+                    <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:8}}>
+                      <div style={{flex:1,height:6,background:'rgba(255,255,255,.08)',borderRadius:3,overflow:'hidden'}}>
+                        <div style={{height:'100%',width:`${lr.score||0}%`,borderRadius:3,transition:'width .6s ease',
+                          background: lr.score>=70 ? 'linear-gradient(90deg,#22c55e,#4ade80)' :
+                                     lr.score>=50 ? 'linear-gradient(90deg,#f59e0b,#fbbf24)' :
+                                                    'linear-gradient(90deg,#ef4444,#f87171)'}}/>
+                      </div>
+                      <span style={{fontFamily:"'JetBrains Mono',monospace",fontSize:13,fontWeight:700,
+                        color: lr.score>=70?'#4ade80':lr.score>=50?'#fbbf24':'#f87171'}}>
+                        {lr.score}/100
+                      </span>
+                    </div>
+                    {/* LLM feedback */}
+                    {lr.feedback && (
+                      <div style={{fontSize:13,color:'rgba(255,255,255,.6)',lineHeight:1.5,marginBottom:8}}>
+                        {lr.feedback}
+                      </div>
+                    )}
                   </>
                 )}
                 <div style={{fontSize:13,color:'rgba(255,255,255,.6)',lineHeight:1.65,
-                  borderTop:'1px solid rgba(255,255,255,.08)',paddingTop:10,marginTop:8}}>
+                  borderTop:'1px solid rgba(255,255,255,.08)',paddingTop:10,marginTop:4}}>
                   <strong style={{color:'rgba(255,255,255,.85)'}}>✦ {lr.correctLetter}:</strong> {lr.correctText}
                   <br/><span style={{color:'rgba(255,255,255,.45)'}}>{lr.explanation}</span>
                 </div>
@@ -803,10 +993,9 @@ function App() {
                   let cls = 'opt';
                   if (phase==='result' && lr && !lr.noAnswer) {
                     if (l === lr.correctLetter) cls += ' correct';
-                    else if (l === lr.parsedAs && !lr.correct) cls += ' wrong';
                   }
                   return (
-                    <button key={l} className={cls} disabled={phase!=='question'||!!buzzer}>
+                    <button key={l} className={cls} disabled>
                       <span style={{color:'rgba(255,255,255,.35)',fontWeight:700,marginRight:10}}>{l}</span>{txt}
                     </button>
                   );
@@ -821,26 +1010,57 @@ function App() {
                 border: `1px solid ${isBuzzer ? '#22d3ee' : 'rgba(255,255,255,.1)'}`,
                 animation: isBuzzer ? 'buzz .4s ease' : 'fadeUp .3s ease'}}>
                 {isBuzzer ? (<>
-                  <div style={{fontWeight:700,color:'#22d3ee',fontSize:16,marginBottom:6}}>🎤 YOUR TURN — Speak now!</div>
-                  <div style={{fontSize:13,color:'rgba(255,255,255,.5)',marginBottom:listening?8:0}}>
-                    Say A, B, C or D — or describe the answer in plain English
+                  <div style={{fontWeight:700,color:'#22d3ee',fontSize:16,marginBottom:6}}>
+                    {judging ? '🧠 Judging your answer...' : '🎤 YOUR TURN — Explain the answer!'}
                   </div>
-                  {listening && transcript && (
-                    <div style={{background:'rgba(34,211,238,.08)',border:'1px solid rgba(34,211,238,.2)',
-                      borderRadius:8,padding:'10px 14px',marginTop:10,
-                      fontFamily:"'JetBrains Mono',monospace",fontSize:14,color:'#22d3ee',animation:'glow 1.5s infinite'}}>
-                      🎙 "{transcript}"
+                  {!judging && (
+                    <div style={{fontSize:13,color:'rgba(255,255,255,.5)',marginBottom:8}}>
+                      Describe the concept in your own words — or just say the letter
                     </div>
                   )}
-                  {!listening && showFallback && (
+
+                  {/* Live transcript + ghost text */}
+                  {(listening || transcript) && !judging && (
+                    <div style={{background:'rgba(34,211,238,.06)',border:'1px solid rgba(34,211,238,.15)',
+                      borderRadius:8,padding:'12px 14px',marginTop:8,
+                      fontFamily:"'JetBrains Mono',monospace",fontSize:14,lineHeight:1.6,minHeight:44}}>
+                      <span style={{color:'#22d3ee'}}>{transcript}</span>
+                      <span style={{color:'rgba(34,211,238,.3)',fontStyle:'italic',transition:'opacity .1s'}}>
+                        {ghostText}
+                      </span>
+                      {listening && (
+                        <span style={{display:'inline-block',width:2,height:'1.1em',
+                          background:'#22d3ee',animation:'blink 1s step-end infinite',
+                          verticalAlign:'text-bottom',marginLeft:2}}/>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Judging spinner */}
+                  {judging && (
+                    <div style={{display:'flex',alignItems:'center',gap:12,marginTop:10,padding:'14px 16px',
+                      background:'rgba(251,191,36,.06)',border:'1px solid rgba(251,191,36,.15)',borderRadius:10}}>
+                      <div style={{width:22,height:22,border:'2px solid rgba(255,255,255,.1)',
+                        borderTop:'2px solid #fbbf24',borderRadius:'50%',animation:'spin .8s linear infinite',flexShrink:0}}/>
+                      <div>
+                        <div style={{color:'#fbbf24',fontSize:14,fontWeight:600}}>Evaluating answer...</div>
+                        <div style={{fontSize:12,color:'rgba(255,255,255,.35)',marginTop:2,fontFamily:"'JetBrains Mono',monospace",fontStyle:'italic'}}>
+                          "{transcript}"
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Fallback text input */}
+                  {!listening && !judging && showFallback && (
                     <div style={{display:'flex',gap:10,marginTop:10}}>
-                      <input className="inp" placeholder="Type answer (A, B, C, D or description)..."
+                      <input className="inp" placeholder="Type your answer..."
                         value={fallbackInput} onChange={e=>setFallbackInput(e.target.value)}
                         onKeyDown={e=>e.key==='Enter'&&submitTextAnswer()} style={{flex:1}} autoFocus/>
-                      <button className="btn btn-gold" onClick={submitTextAnswer}>→</button>
+                      <button className="btn btn-gold" onClick={submitTextAnswer} disabled={judging}>→</button>
                     </div>
                   )}
-                  {!listening && !showFallback && (
+                  {!listening && !judging && !showFallback && !transcript && (
                     <button className="btn btn-ghost" style={{marginTop:10,fontSize:13,padding:'8px 16px'}}
                       onClick={()=>{ doSTT(); setTimeout(()=>setShowFallback(true), 3000); }}>
                       🔄 Retry mic / Type answer
