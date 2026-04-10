@@ -550,7 +550,7 @@ function App() {
     writeRoom(codeRef.current, updated);
     setGs(updated);
 
-    setTimeout(() => advance(codeRef.current), 5500);
+    // Manual advance via "Next Question" button
   }
 
   function submitTextAnswer() {
@@ -571,7 +571,6 @@ function App() {
       },
     };
     writeRoom(rc, updated);
-    setTimeout(() => advance(rc), 5000);
   }
 
   function advance(rc) {
@@ -917,10 +916,9 @@ function App() {
       {(phase==='question'||phase==='buzzedin'||phase==='result') && (
         <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',position:'relative'}}>
 
-          {/* Graphic EQ — horizontal bar along the bottom */}
-          <div style={{position:'absolute',bottom:0,left:0,right:0,height:48,zIndex:10,
+          {/* Graphic EQ — horizontal bar near the bottom */}
+          <div style={{position:'absolute',bottom:16,left:0,right:0,height:48,zIndex:10,
             display:'flex',alignItems:'flex-end',gap:2,padding:'0 8px',
-            background:'linear-gradient(to top,rgba(6,9,20,.95),transparent)',
             pointerEvents:'none'}}>
             {eqBands.map((h,i) => (
               <div key={i} style={{flex:1,borderRadius:'2px 2px 0 0',
@@ -985,6 +983,12 @@ function App() {
                   borderTop:'1px solid rgba(255,255,255,.08)',paddingTop:10,marginTop:4}}>
                   <strong style={{color:'rgba(255,255,255,.85)'}}>✦ Answer:</strong> {lr.correctAnswer}
                   <br/><span style={{color:'rgba(255,255,255,.45)'}}>{lr.explanation}</span>
+                </div>
+                <div style={{textAlign:'center',marginTop:14}}>
+                  <button className="btn btn-gold" onClick={()=>advance(codeRef.current)}
+                    style={{fontSize:15,padding:'10px 32px'}}>
+                    {(gs?.currentQ||0)+1 >= (gs?.questions||[]).length ? '🏆 See Results' : 'Next Question →'}
+                  </button>
                 </div>
               </div>
             )}
