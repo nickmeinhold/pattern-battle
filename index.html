@@ -484,7 +484,8 @@ function App() {
       silenceTimer = setTimeout(() => submit(lastT), SILENCE_MS);
     };
 
-    r.onerror = () => {
+    r.onerror = (ev) => {
+      console.warn('STT error:', ev.error);
       r.active = false;
       setListening(false);
       clearTimeout(silenceTimer);
@@ -495,7 +496,8 @@ function App() {
       r.active = false;
       setListening(false);
       clearTimeout(silenceTimer);
-      if (!submittedRef.current && lastT.trim()) submit(lastT);
+      if (!submittedRef.current && lastT.trim()) { submit(lastT); return; }
+      if (!submittedRef.current) setShowFallback(true);
     };
 
     try { r.start(); } catch {}
@@ -1066,20 +1068,16 @@ function App() {
                     </div>
                   )}
 
-                  {/* Fallback text input */}
-                  {!listening && !judging && showFallback && (
+                  {/* Text input — always available as fallback */}
+                  {!judging && (
                     <div style={{display:'flex',gap:10,marginTop:10}}>
-                      <input className="inp" placeholder="Type your answer..."
+                      <input className="inp" placeholder={listening ? "...or type your answer here" : "Type your answer..."}
                         value={fallbackInput} onChange={e=>setFallbackInput(e.target.value)}
-                        onKeyDown={e=>e.key==='Enter'&&submitTextAnswer()} style={{flex:1}} autoFocus/>
-                      <button className="btn btn-gold" onClick={submitTextAnswer} disabled={judging}>→</button>
+                        onKeyDown={e=>e.key==='Enter'&&submitTextAnswer()} style={{flex:1}}
+                        autoFocus={!listening}/>
+                      <button className="btn btn-gold" onClick={submitTextAnswer}
+                        disabled={judging || !fallbackInput.trim()}>→</button>
                     </div>
-                  )}
-                  {!listening && !judging && !showFallback && !transcript && (
-                    <button className="btn btn-ghost" style={{marginTop:10,fontSize:13,padding:'8px 16px'}}
-                      onClick={()=>{ doSTT(); setTimeout(()=>setShowFallback(true), 3000); }}>
-                      🔄 Retry mic / Type answer
-                    </button>
                   )}
                 </>) : (
                   <div style={{fontWeight:700,fontSize:15}}>
