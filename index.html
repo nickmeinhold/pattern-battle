@@ -283,7 +283,9 @@ function App() {
       setTimeLeft(Math.ceil(left));
     }
     if (state.phase !== 'lobby') setScreen('game');
-    // STT started manually via "Use voice" button (requires user gesture)
+    if (state.phase === 'buzzedin' && state.buzzer?.pid === pidRef.current) {
+      if (!sttRef.current?.active) doSTT();
+    }
   }
 
   // ── Polling sync (fallback + timer) ────────────────────────────────────────
@@ -372,7 +374,7 @@ function App() {
     };
     writeRoom(codeRef.current, updated);
     setGs(updated);
-    // STT requires user gesture — started via "Use voice" button
+    doSTT();
   }
 
   // ── Prediction System ─────────────────────────────────────────────────────
@@ -443,13 +445,13 @@ function App() {
     }
   }
 
-  // ── STT (requires user gesture to start in most browsers) ──────────────────
+  // ── STT ───────────────────────────────────────────────────────────────────
   function doSTT() {
     if (sttRef.current?.active) return;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { console.warn('SpeechRecognition not available'); return; }
+    if (!SR) return;
     const r = new SR();
-    r.continuous = true;
+    r.continuous = false;
     r.interimResults = true;
     r.lang = 'en-US';
     r.active = true;
@@ -457,46 +459,24 @@ function App() {
     setListening(true);
     submittedRef.current = false;
 
-    let lastT = '';
-    let silenceTimer = null;
-
-    const submit = (text) => {
-      if (submittedRef.current) return;
-      if (!text || !text.trim()) return;
-      submittedRef.current = true;
-      r.active = false;
-      setListening(false);
-      clearTimeout(silenceTimer);
-      try { r.stop(); } catch {}
-      cancelAllPredictions();
-      handleAnswer(text);
-    };
-
     r.onresult = e => {
       const t = Array.from(e.results).map(x => x[0].transcript).join('');
-      lastT = t;
       setTranscript(t);
       if (!submittedRef.current) handleInterimSpeech(t);
-
-      clearTimeout(silenceTimer);
-      silenceTimer = setTimeout(() => submit(lastT), SILENCE_MS);
+      if (e.results[e.results.length - 1].isFinal) {
+        if (submittedRef.current) return;
+        submittedRef.current = true;
+        r.active = false;
+        setListening(false);
+        cancelAllPredictions();
+        handleAnswer(t);
+      }
     };
 
-    r.onerror = (ev) => {
-      console.warn('STT error:', ev.error);
-      r.active = false;
-      setListening(false);
-      clearTimeout(silenceTimer);
-    };
+    r.onerror = () => { r.active = false; setListening(false); };
+    r.onend   = () => { r.active = false; setListening(false); };
 
-    r.onend = () => {
-      r.active = false;
-      setListening(false);
-      clearTimeout(silenceTimer);
-      if (!submittedRef.current && lastT.trim()) submit(lastT);
-    };
-
-    try { r.start(); } catch(e) { console.warn('STT start failed:', e); r.active = false; setListening(false); }
+    try { r.start(); } catch {}
   }
 
   // ── Handle Answer (async — LLM judges) ─────────────────────────────────────
