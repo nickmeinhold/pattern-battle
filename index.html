@@ -1000,47 +1000,37 @@ function App() {
                       </div>
                     </div>
                   ) : (<>
-                    {/* Timer + text input row */}
-                    <div style={{display:'flex',alignItems:'center',gap:12}}>
-                      <div style={{position:'relative',width:48,height:48,flexShrink:0}}>
-                        <svg width={48} height={48} style={{transform:'rotate(-90deg)'}}>
-                          <circle cx={24} cy={24} r={20} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth={3}/>
-                          <circle cx={24} cy={24} r={20} fill="none" stroke={timerColor} strokeWidth={3}
-                            strokeDasharray={2*Math.PI*20} strokeDashoffset={2*Math.PI*20*(1-timerPct)} strokeLinecap="round"
+                    {/* Timer + live transcript */}
+                    <div style={{display:'flex',alignItems:'center',gap:14,marginTop:4}}>
+                      <div style={{position:'relative',width:56,height:56,flexShrink:0}}>
+                        <svg width={56} height={56} style={{transform:'rotate(-90deg)'}}>
+                          <circle cx={28} cy={28} r={24} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth={4}/>
+                          <circle cx={28} cy={28} r={24} fill="none" stroke={timerColor} strokeWidth={4}
+                            strokeDasharray={2*Math.PI*24} strokeDashoffset={2*Math.PI*24*(1-timerPct)} strokeLinecap="round"
                             style={{transition:'stroke-dashoffset .5s, stroke .5s',filter:`drop-shadow(0 0 4px ${timerColor})`}}/>
                         </svg>
                         <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',
-                          fontFamily:"'JetBrains Mono',monospace",fontSize:14,fontWeight:700,color:timerColor}}>
+                          fontFamily:"'JetBrains Mono',monospace",fontSize:16,fontWeight:700,color:timerColor}}>
                           {timeLeft}
                         </div>
                       </div>
-                      <input className="inp" placeholder="Type your answer and press Enter..."
-                        value={fallbackInput} onChange={e=>setFallbackInput(e.target.value)}
-                        onKeyDown={e=>e.key==='Enter'&&submitTextAnswer()}
-                        style={{flex:1,fontSize:15,padding:'14px 16px'}} autoFocus/>
-                      <button className="btn btn-gold" onClick={submitTextAnswer}
-                        disabled={!fallbackInput.trim()} style={{padding:'14px 20px',fontSize:18}}>→</button>
-                    </div>
-
-                    {/* Mic button + STT transcript */}
-                    <div style={{display:'flex',alignItems:'center',gap:10,marginTop:10}}>
-                      <button className="btn btn-ghost" onClick={()=>doSTT()}
-                        disabled={listening}
-                        style={{fontSize:12,padding:'6px 12px',flexShrink:0}}>
-                        {listening ? '🎤 Listening...' : '🎤 Use voice'}
-                      </button>
-                      {transcript && (
-                        <div style={{flex:1,fontSize:12,color:'rgba(255,255,255,.4)',fontFamily:"'JetBrains Mono',monospace",
-                          fontStyle:'italic',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                      <div style={{flex:1,background:'rgba(34,211,238,.06)',border:'1px solid rgba(34,211,238,.15)',
+                        borderRadius:10,padding:'14px 16px',minHeight:52,
+                        fontFamily:"'JetBrains Mono',monospace",fontSize:15,lineHeight:1.6}}>
+                        {transcript ? (<>
                           <span style={{color:'#22d3ee'}}>{transcript}</span>
-                          <span style={{color:'rgba(34,211,238,.25)'}}>{ghostText}</span>
-                        </div>
-                      )}
-                      {listening && !transcript && (
-                        <span style={{fontSize:12,color:'rgba(255,255,255,.3)',animation:'glow 1.5s infinite'}}>
-                          Speak now...
-                        </span>
-                      )}
+                          <span style={{color:'rgba(34,211,238,.3)',fontStyle:'italic'}}>{ghostText}</span>
+                        </>) : (
+                          <span style={{color:'rgba(255,255,255,.2)',animation:'glow 2s ease-in-out infinite'}}>
+                            {listening ? 'Listening...' : 'Starting mic...'}
+                          </span>
+                        )}
+                        {listening && (
+                          <span style={{display:'inline-block',width:2,height:'1.1em',
+                            background:'#22d3ee',animation:'blink 1s step-end infinite',
+                            verticalAlign:'text-bottom',marginLeft:2}}/>
+                        )}
+                      </div>
                     </div>
                   </>)}
                 </>) : (
