@@ -22,6 +22,7 @@
   @keyframes correctFlash{0%,100%{box-shadow:none}50%{box-shadow:0 0 60px 20px rgba(34,197,94,.25)}}
   @keyframes wrongFlash{0%,100%{box-shadow:none}50%{box-shadow:0 0 60px 20px rgba(239,68,68,.25)}}
   @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+  @keyframes indeterminate{0%{left:-40%;width:40%}50%{left:30%;width:50%}100%{left:100%;width:40%}}
   .opt{width:100%;text-align:left;padding:14px 18px;border-radius:10px;cursor:pointer;
     font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.5;
     background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);
@@ -193,7 +194,7 @@ async function genQ(topic) {
     method: 'POST',
     headers: API_HEADERS,
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
+      model: 'claude-haiku-4-5-20251001',
       max_tokens: 500,
       system: `You are a quiz generator for software design patterns. Generate open-ended questions that test conceptual understanding — no multiple choice.
 Return ONLY valid JSON — no markdown, no backticks, zero preamble:
@@ -781,11 +782,16 @@ Hint 3: A near-giveaway with a specific technical detail.`,
     topicIndicesRef.current = selected.map(s => s.idx);
     prefetchedQRef.current = null;
 
-    // Generate only the first question, then start immediately
+    // Generate Q1 and Q2 in parallel — start the game as soon as Q1 lands
+    const q1Promise = genQ(selected[0].topic);
+    const q2Promise = selected.length > 1 ? genQ(selected[1].topic).catch(() => null) : Promise.resolve(null);
+
     let firstQ;
-    try { firstQ = await genQ(selected[0].topic); }
+    try { firstQ = await q1Promise; }
     catch(e) { console.warn('Q gen failed:', e); setGenerating(false); return; }
-    setGenProgress(1);
+
+    // Q2 may already be done — stash it for advance()
+    q2Promise.then(q => { if (q) prefetchedQRef.current = q; });
 
     const state = readRoom(roomCode);
     buzzedRef.current = false;
@@ -798,9 +804,6 @@ Hint 3: A near-giveaway with a specific technical detail.`,
     setGs(updated);
     setScreen('game');
     setGenerating(false);
-
-    // Start prefetching the next question in the background
-    prefetchNextQ(1);
   }
 
   async function prefetchNextQ(nextIdx) {
@@ -982,8 +985,13 @@ Hint 3: A near-giveaway with a specific technical detail.`,
             <div style={{textAlign:'center',padding:20}}>
               <div style={{width:36,height:36,border:'3px solid rgba(255,255,255,.1)',
                 borderTop:'3px solid #fbbf24',borderRadius:'50%',animation:'spin .8s linear infinite',margin:'0 auto 14px'}}/>
-              <div style={{fontSize:14,color:'rgba(255,255,255,.6)',marginBottom:10}}>
+              <div style={{fontSize:14,color:'rgba(255,255,255,.6)',marginBottom:10,animation:'glow 1.5s ease-in-out infinite'}}>
                 Generating first question...
+              </div>
+              <div style={{height:4,background:'rgba(255,255,255,.08)',borderRadius:2,overflow:'hidden',position:'relative'}}>
+                <div style={{position:'absolute',height:'100%',
+                  background:'linear-gradient(90deg,#f59e0b,#ef4444)',borderRadius:2,
+                  animation:'indeterminate 1.4s ease-in-out infinite'}}/>
               </div>
             </div>
           ) : (
