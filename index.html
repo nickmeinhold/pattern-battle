@@ -323,6 +323,9 @@ function App() {
   const hintTimerRef     = useRef(null);
   const hintAbortRef     = useRef(null);
   const topicIndicesRef  = useRef([]);
+  const selectedTopicsRef = useRef([]);
+  const prefetchedQRef   = useRef(null);
+  const prefetchingRef   = useRef(false);
 
   gsRef.current    = gs;
   codeRef.current  = roomCode;
@@ -705,20 +708,40 @@ Hint 3: A near-giveaway with a specific technical detail.`,
     writeRoom(rc, updated);
   }
 
-  function advance(rc) {
+  async function advance(rc) {
     const state = readRoom(rc);
     if (!state) return;
     const next = (state.currentQ || 0) + 1;
-    if (next >= (state.questions || []).length) {
+    if (next >= NUM_QS) {
       writeRoom(rc, { ...state, phase: 'gameover' });
-    } else {
-      buzzedRef.current = false;
-      writeRoom(rc, {
-        ...state, phase: 'question', currentQ: next,
-        currentQuestion: state.questions[next], qStart: Date.now(),
-        buzzer: null, lastResult: null,
-      });
+      return;
     }
+
+    // Use prefetched question, or wait for it if still generating
+    let nextQ = prefetchedQRef.current;
+    if (!nextQ && prefetchingRef.current) {
+      // Brief wait for in-flight prefetch
+      for (let i = 0; i < 30 && !prefetchedQRef.current; i++) await new Promise(r => setTimeout(r, 200));
+      nextQ = prefetchedQRef.current;
+    }
+    if (!nextQ) {
+      // Fallback: generate on the spot
+      const sel = selectedTopicsRef.current[next];
+      if (sel) try { nextQ = await genQ(sel.topic); } catch {}
+    }
+    if (!nextQ) { writeRoom(rc, { ...state, phase: 'gameover' }); return; }
+
+    prefetchedQRef.current = null;
+    buzzedRef.current = false;
+    const questions = [...(state.questions || []), nextQ];
+    writeRoom(rc, {
+      ...state, phase: 'question', questions, currentQ: next,
+      currentQuestion: nextQ, qStart: Date.now(),
+      buzzer: null, lastResult: null,
+    });
+
+    // Prefetch the one after this
+    prefetchNextQ(next + 1);
   }
 
   // ── Join Room ─────────────────────────────────────────────────────────────
@@ -754,26 +777,41 @@ Hint 3: A near-giveaway with a specific technical detail.`,
     setGenerating(true); setGenProgress(0);
     // FSRS-driven topic selection: prioritize unseen + most forgotten
     const selected = selectTopics(NUM_QS);
+    selectedTopicsRef.current = selected;
     topicIndicesRef.current = selected.map(s => s.idx);
-    const questions = [];
-    for (let i = 0; i < selected.length; i++) {
-      try { questions.push(await genQ(selected[i].topic)); }
-      catch(e) { console.warn('Q gen failed:', e); }
-      setGenProgress(i + 1);
-    }
-    if (!questions.length) { setGenerating(false); return; }
+    prefetchedQRef.current = null;
+
+    // Generate only the first question, then start immediately
+    let firstQ;
+    try { firstQ = await genQ(selected[0].topic); }
+    catch(e) { console.warn('Q gen failed:', e); setGenerating(false); return; }
+    setGenProgress(1);
 
     const state = readRoom(roomCode);
     buzzedRef.current = false;
     setHints([]); setHintsShown(0);
     const updated = {
-      ...state, phase:'question', questions, currentQ:0,
-      currentQuestion: questions[0], qStart: Date.now(), buzzer:null, lastResult:null,
+      ...state, phase:'question', questions:[firstQ], currentQ:0,
+      currentQuestion: firstQ, qStart: Date.now(), buzzer:null, lastResult:null,
     };
     writeRoom(roomCode, updated);
     setGs(updated);
     setScreen('game');
     setGenerating(false);
+
+    // Start prefetching the next question in the background
+    prefetchNextQ(1);
+  }
+
+  async function prefetchNextQ(nextIdx) {
+    const selected = selectedTopicsRef.current;
+    if (nextIdx >= selected.length || nextIdx >= NUM_QS) { prefetchedQRef.current = null; return; }
+    prefetchingRef.current = true;
+    try {
+      const q = await genQ(selected[nextIdx].topic);
+      prefetchedQRef.current = q;
+    } catch(e) { console.warn('Prefetch failed:', e); prefetchedQRef.current = null; }
+    prefetchingRef.current = false;
   }
 
   // ── Cleanup ───────────────────────────────────────────────────────────────
@@ -812,7 +850,7 @@ Hint 3: A near-giveaway with a specific technical detail.`,
 
   const lr = gs?.lastResult;
   const qIdx = (gs?.currentQ||0)+1;
-  const qTotal = (gs?.questions||[]).length;
+  const qTotal = NUM_QS;
 
   // ══════════════════════════════════════════════════════════════════════════
   // SCREEN: JOIN
@@ -945,11 +983,7 @@ Hint 3: A near-giveaway with a specific technical detail.`,
               <div style={{width:36,height:36,border:'3px solid rgba(255,255,255,.1)',
                 borderTop:'3px solid #fbbf24',borderRadius:'50%',animation:'spin .8s linear infinite',margin:'0 auto 14px'}}/>
               <div style={{fontSize:14,color:'rgba(255,255,255,.6)',marginBottom:10}}>
-                Generating questions... {genProgress}/{NUM_QS}
-              </div>
-              <div style={{height:4,background:'rgba(255,255,255,.08)',borderRadius:2,overflow:'hidden'}}>
-                <div style={{height:'100%',width:`${genProgress/NUM_QS*100}%`,
-                  background:'linear-gradient(90deg,#f59e0b,#ef4444)',borderRadius:2,transition:'width .4s'}}/>
+                Generating first question...
               </div>
             </div>
           ) : (
@@ -1159,7 +1193,7 @@ Hint 3: A near-giveaway with a specific technical detail.`,
                 <div style={{textAlign:'center',marginTop:14}}>
                   <button className="btn btn-gold" onClick={()=>{setHints([]);setHintsShown(0);advance(codeRef.current);}}
                     style={{fontSize:15,padding:'10px 32px'}}>
-                    {(gs?.currentQ||0)+1 >= (gs?.questions||[]).length ? '🏆 See Results' : 'Next Question →'}
+                    {(gs?.currentQ||0)+1 >= NUM_QS ? '🏆 See Results' : 'Next Question →'}
                   </button>
                 </div>
               </div>
