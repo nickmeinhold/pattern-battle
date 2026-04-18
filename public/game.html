@@ -303,6 +303,7 @@ function App() {
   const streamRef      = useRef(null);
   const animRef        = useRef(null);
   const syncRef        = useRef(null);
+  const countdownRef   = useRef(null);
   const sttRef         = useRef(null);
   const buzzedRef      = useRef(false);
   const gsRef          = useRef(null);
@@ -336,6 +337,21 @@ function App() {
   const myScore = players[pid]?.score || 0;
   const sorted  = Object.entries(players).sort((a,b)=>(b[1].score||0)-(a[1].score||0));
   const isBuzzer = buzzer?.pid === pid;
+
+  // ── Countdown timer (independent of sync polling) ───────────────────────
+  useEffect(() => {
+    clearInterval(countdownRef.current);
+    if ((phase === 'question' || phase === 'buzzedin') && gs?.qStart) {
+      const tick = () => {
+        const left = Math.max(0, Q_SECS - (Date.now() - gs.qStart) / 1000);
+        setTimeLeft(Math.ceil(left));
+        if (left <= 0) clearInterval(countdownRef.current);
+      };
+      tick();
+      countdownRef.current = setInterval(tick, 200);
+    }
+    return () => clearInterval(countdownRef.current);
+  }, [phase, gs?.qStart]);
 
   // ── BroadcastChannel listener ─────────────────────────────────────────────
   useEffect(() => {
@@ -818,6 +834,7 @@ Hint 3: A near-giveaway with a specific technical detail.`,
   useEffect(() => () => {
     cancelAnimationFrame(animRef.current);
     clearInterval(syncRef.current);
+    clearInterval(countdownRef.current);
     streamRef.current?.getTracks().forEach(t => t.stop());
     analyserRef.current?.context?.close?.();
     predAbortRef.current?.abort();
